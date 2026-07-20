@@ -2,7 +2,7 @@
 
 > E2E testing of SMS verification flows with Playwright, webhooks, and real non-VoIP numbers — without flaky tests or security backdoors.
 
-🇷🇺 [Русская версия](README.ru.md) · 📄 [Full runnable example](examples/otp-webhook.spec.ts)
+🇷🇺 [Русская версия](README.ru.md) 
 
 When setting up end-to-end (E2E) tests for sign-up or login flows, developers invariably hit a brick wall: the CI/CD pipeline grinds to a halt at the SMS verification step. Cloud containers obviously lack physical SIM cards, leaving your tests to either hang indefinitely on a timeout or beg for manual intervention. Either way, the "automation" part goes right out the window.
 
@@ -98,7 +98,7 @@ Dedicated B2B platforms provide developers with direct access to pools of real m
 
 ### How Can Playwright Receive Real SMS Messages? Code Walkthrough
 
-Let's break down what the architecture of this solution looks like under the hood, using the [HeroSMS](https://hero-sms.com) service as a prime example. The gateway exposes an [SMS-Activate-compatible API](https://hero-sms.com/api) at `https://hero-sms.com/stubs/handler_api.php`: a `getNumberV2` call rents a real number and returns a JSON activation object (or a bare error string like `NO_NUMBERS`), incoming messages are pushed as `POST` webhooks, and `setStatus` completes (`6`) or cancels (`8`) the activation.
+Let's break down what the architecture of this solution looks like under the hood, using the [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic) service as a prime example. The gateway exposes an [SMS-Activate-compatible API](https://hero-sms.com/api) at `https://hero-sms.com/stubs/handler_api.php`: a `getNumberV2` call rents a real number and returns a JSON activation object (or a bare error string like `NO_NUMBERS`), incoming messages are pushed as `POST` webhooks, and `setStatus` completes (`6`) or cancels (`8`) the activation.
 
 > **Prerequisite:** HeroSMS delivers webhooks to up to three HTTPS URLs configured in your account settings — not per request. Point one of them at your runner (via an ngrok tunnel during local development), and for a production-grade CI setup whitelist the gateway's source IPs: `84.32.223.53` and `185.138.88.87`.
 
@@ -303,6 +303,6 @@ There is no silver bullet when it comes to OTP automation: your choice of approa
 
 ## About
 
-This guide uses [HeroSMS](https://hero-sms.com) — a programmable SMS verification platform with real non-VoIP numbers across dozens of countries, an [SMS-Activate-compatible REST API](https://hero-sms.com/api), and webhook delivery of incoming messages — as the reference B2B provider for the Level 3 approach.
+This guide uses [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic) — a programmable SMS verification platform with real non-VoIP numbers across dozens of countries, an [SMS-Activate-compatible REST API](https://hero-sms.com/api), and webhook delivery of incoming messages — as the reference B2B provider for the Level 3 approach.
 
 Licensed under [MIT](LICENSE).
