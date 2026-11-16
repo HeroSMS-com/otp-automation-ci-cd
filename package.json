@@ -1,7 +1,7 @@
 {
   "name": "otp-automation-ci-cd",
   "version": "1.0.0",
-  "description": "Automating SMS OTP verification in CI/CD pipelines: Playwright + webhooks + real non-VoIP numbers. E2E testing without flaky tests or security backdoors.",
+  "description": "Automating SMS OTP verification in CI/CD pipelines: Playwright + webhooks + numbers that receive real SMS. E2E testing without flaky tests or security backdoors.",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
