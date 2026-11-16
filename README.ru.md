@@ -1,6 +1,6 @@
 # Автоматизация OTP в CI/CD: почему падают тесты и как избежать рисков при релизе
 
-> E2E-тестирование СМС-верификации с Playwright, вебхуками и реальными non-VoIP номерами — без flaky-тестов и дыр в безопасности.
+> E2E-тестирование СМС-верификации с Playwright, вебхуками и номерами, на которые приходят настоящие СМС — без flaky-тестов и дыр в безопасности.
 
 🇬🇧 [English version](README.md) · 🇨🇳 [简体中文](README.zh-CN.md)
 
@@ -25,7 +25,7 @@
 Вы используете встроенные песочницы крупных провайдеров авторизации, прописывая в консоли Firebase Authentication фиксированные номера или используя тестовые лимиты Twilio с фиксированными кодами (например, для прохождения Apple/Google App Store Review).
 
 - **В чем суть:** метод отлично работает на локальной машине разработчика для быстрой отладки интерфейса.
-- **Почему это тупик для CI/CD:** это решение не масштабируется. В таких песочницах всегда есть жёсткие лимиты на количество номеров (обычно до 10 штук в Firebase) и частоту запросов. Запустить параллельный тест на регистрацию 50 пользователей в параллельных потоках GitHub Actions не получится — пайплайн упрётся в лимиты. Кроме того, проверка реального флоу доставки SMS и гео-специфичных шлюзов вообще остаётся за рамками теста.
+- **Почему это тупик для CI/CD:** это решение не масштабируется. В таких песочницах всегда есть жёсткие лимиты на количество номеров (обычно до 10 штук в Firebase) и частоту запросов. Запустить 50 параллельных тестов регистрации в потоках GitHub Actions не получится — пайплайн упрётся в лимиты. Кроме того, проверка реального флоу доставки SMS и гео-специфичных шлюзов вообще остаётся за рамками теста.
 
 ### 🔴 2 уровень: «Инфраструктурный хаос» (связка «Android-смартфон + SMS-to-Webhook / ADB / Appium»)
 
@@ -65,7 +65,7 @@
 - **В чем польза:** стопроцентная скорость и стабильность. Тест не зависит от телефонных сетей, сотовых операторов и качества связи. Вы проверяете честную логику генерации кода бэкендом и его ввода на фронтенде, не тратя ни копейки на отправку реальных сообщений.
 - **Почему этим мало кто пользуется:** этот метод сложно реализовать технически. Во-первых, служба безопасности проекта часто запрещает давать облачным CI/CD-раннерам прямой доступ к базам данных. Во-вторых, инженерам приходится писать дополнительный код внутри тестового фреймворка — настраивать пулы подключений к Redis или PostgreSQL прямо внутри автотестов, что усложняет проект.
 
-### 🏛️ 3 уровень: «Идеальный фундамент» (программируемые B2B API с non-VoIP номерами)
+### 🏛️ 3 уровень: «Идеальный фундамент» (программируемые B2B API для СМС-верификации)
 
 - **Польза:** 🟢🟢🟢 *(максимальная реалистичность теста)*
 - **Сложность и затраты:** 🔴🔴🔴 *(требует бюджета на тестирование)*
@@ -84,7 +84,7 @@
 
 ### Разбор кода: интеграция Webhook в проект на Playwright (TypeScript)
 
-Разберём, как выглядит архитектура такого решения на примере сервиса [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic). Шлюз предоставляет [SMS-Activate-совместимый API](https://hero-sms.com/api) по адресу `https://hero-sms.com/stubs/handler_api.php`: вызов `getNumberV2` арендует реальный номер и возвращает JSON-объект активации (или голую строку ошибки вроде `NO_NUMBERS`), входящие сообщения прилетают `POST`-вебхуками, а `setStatus` завершает (`6`) или отменяет (`8`) активацию.
+Разберём, как выглядит архитектура такого решения на примере сервиса [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026). Шлюз предоставляет [HTTP API](https://hero-sms.com/api) по адресу `https://hero-sms.com/stubs/handler_api.php`: вызов `getNumberV2` арендует номер и возвращает JSON-объект активации (или голую строку ошибки вроде `NO_NUMBERS`), входящие сообщения прилетают `POST`-вебхуками, а `setStatus` завершает (`6`) или отменяет (`8`) активацию.
 
 > **Предварительная настройка:** HeroSMS отправляет вебхуки на 1–3 HTTPS-URL, заданных в настройках аккаунта, — а не в параметрах запроса. Направьте один из них на ваш раннер (локально — через туннель ngrok), а для боевого CI добавьте в whitelist IP-адреса шлюза: `84.32.223.53` и `185.138.88.87`.
 
@@ -95,7 +95,7 @@ import http from 'http';
 
 // --- Type Definitions (per https://hero-sms.com/api) ---
 interface HeroSmsActivation {
-  activationId: string;
+  activationId: string | number;
   phoneNumber: string;
   activationCost: number;
   activationEndTime: string;
@@ -103,7 +103,7 @@ interface HeroSmsActivation {
 }
 
 interface HeroSmsWebhookPayload {
-  activationId: string;
+  activationId: string | number;
   service: string;
   text: string | null;
   code?: string | null;
@@ -111,7 +111,7 @@ interface HeroSmsWebhookPayload {
   receivedAt: string;
 }
 
-// SMS-Activate-compatible endpoint of HeroSMS
+// HeroSMS handler_api endpoint (docs: https://hero-sms.com/api)
 const HEROSMS_API_URL = 'https://hero-sms.com/stubs/handler_api.php';
 const HEROSMS_API_KEY = process.env.HEROSMS_API_KEY!;
 const PORT = process.env.WEBHOOK_PORT ? parseInt(process.env.WEBHOOK_PORT, 10) : 3000;
@@ -154,11 +154,12 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
         const payload = JSON.parse(body) as HeroSmsWebhookPayload;
 
         // Resolve only for our own activation; the `code` field is nullable
-        if (payload.code && payload.activationId === expectedActivationId) {
+        if (payload.code && String(payload.activationId) === expectedActivationId) {
           resolveWebhook(payload.code);
         }
 
-        // Always ACK with 200 — otherwise HeroSMS retries the delivery
+        // ACK every well-formed delivery with 200 (other activations included):
+        // otherwise HeroSMS retries the delivery
         // at least 7 times every 20-30 seconds
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'accepted' }));
@@ -183,21 +184,21 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
       server.once('error', reject);
     });
 
-    // 4. Rent a real number: GET ?action=getNumberV2
+    // 4. Rent a number that can receive SMS: GET ?action=getNumberV2
     const { data } = await axios.get<HeroSmsActivation | string>(HEROSMS_API_URL, {
       params: {
         api_key: HEROSMS_API_KEY,
         action: 'getNumberV2',
-        service: 'tg', // service code from ?action=getServicesList
-        country: 6     // country ID from ?action=getCountries
+        service: 'ot', // 'ot' = Any other, for testing your own app (codes: ?action=getServicesList)
+        country: 6     // demo value: use the country ID you test (?action=getCountries)
       }
     });
 
-    // On failure the gateway answers with a bare string ("NO_NUMBERS", "BAD_KEY", ...)
+    // On failure the gateway answers with a bare string ("NO_NUMBERS"); BAD_KEY/NO_BALANCE come as JSON with HTTP 4xx and make axios throw
     expect(typeof data, `Gateway returned "${data}" instead of an activation object`).toBe('object');
     const activation = data as HeroSmsActivation;
 
-    expectedActivationId = activation.activationId;
+    expectedActivationId = String(activation.activationId);
     const { phoneNumber } = activation;
 
     // 5. Trigger the OTP in the UI
@@ -232,9 +233,11 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
     activationCompleted = true;
 
   } finally {
-    // 10. Money-safe teardown: cancel the rented number (status 8) if the
-    // test failed before completing the activation, so a broken pipeline
-    // doesn't leave paid rentals hanging
+    // 10. Teardown: try to cancel the rented number (status 8) if the test
+    // failed before completing the activation. A cancel within the first
+    // ~2 minutes can be refused (EARLY_CANCEL_DENIED) and is ignored here;
+    // an activation that never receives an SMS is refunded to the HeroSMS
+    // balance when it expires
     if (expectedActivationId && !activationCompleted) {
       await axios.get(HEROSMS_API_URL, {
         params: { api_key: HEROSMS_API_KEY, action: 'setStatus', id: expectedActivationId, status: 8 }
@@ -279,7 +282,7 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
 
 **Вопрос: что делать, если реальная доставка СМС со стороны оператора связи займёт больше 15 секунд?**
 
-**Ответ:** в коде сценария для этого предусмотрен метод `Promise.race`, который прерывает тест по жёсткому верхнему лимиту времени (таймауту). Если сотовые сети в конкретном регионе перегружены, этот лимит в коде можно безопасно увеличить до 30–45 секунд. Сам шлюз при этом тоже ретраит недоставленные вебхуки (минимум 7 попыток на протяжении 3+ минут), так что кратковременный сетевой сбой между HeroSMS и раннером код не потеряет. Если же тесты стабильно падают по таймауту, это прямой сигнал для команды проверить связность вашего бэкенд-шлюза с оператором.
+**Ответ:** в коде сценария для этого предусмотрен метод `Promise.race`, который прерывает тест по жёсткому верхнему лимиту времени (таймауту). Если сотовые сети в конкретном регионе перегружены, поднимите `TIMEOUT_MS` до нескольких минут для международных СМС и заодно увеличьте собственный таймаут теста Playwright через `test.setTimeout()` (по умолчанию 30 секунд). Сам шлюз при этом тоже ретраит недоставленные вебхуки (минимум 7 попыток на протяжении 3+ минут), так что кратковременный сетевой сбой между HeroSMS и раннером код не потеряет. Если же тесты стабильно падают по таймауту, это прямой сигнал для команды проверить связность вашего бэкенд-шлюза с оператором.
 
 **Вопрос: безопасно ли передавать токен авторизации API в кодовую базу автотестов?**
 
@@ -289,6 +292,6 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
 
 ## О проекте
 
-В качестве референсного B2B-провайдера для подхода 3 уровня в гайде используется [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic) — программируемая платформа СМС-верификации с реальными non-VoIP номерами в десятках стран, [SMS-Activate-совместимым REST API](https://hero-sms.com/api) и доставкой входящих сообщений через вебхуки.
+В качестве референсного B2B-провайдера для подхода 3 уровня в гайде используется [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026) — программируемая платформа СМС-верификации с номерами в 180+ странах, [HTTP API](https://hero-sms.com/api) и доставкой входящих сообщений через вебхуки.
 
 Лицензия: [MIT](LICENSE).
