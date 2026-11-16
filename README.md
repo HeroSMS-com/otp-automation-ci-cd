@@ -1,6 +1,6 @@
 # Automating OTP in CI/CD: Why Tests Break and How to Bulletproof Your Releases
 
-> E2E testing of SMS verification flows with Playwright, webhooks, and real non-VoIP numbers — without flaky tests or security backdoors.
+> E2E testing of SMS verification flows with Playwright, webhooks, and numbers that receive real SMS — without flaky tests or security backdoors.
 
 🇷🇺 [Русская версия](README.ru.md) · 🇨🇳 [简体中文](README.zh-CN.md)
 
@@ -19,7 +19,7 @@ In this post, we'll break down the tools that actually fix this — moving your 
 
 ## The Hidden Costs of Skipping SMS Automation
 
-Let's be honest: bypassing SMS verification or simply sweeping the problem under the rug is a recipe for disaster.
+Let's be honest: skipping the SMS step in tests or simply sweeping the problem under the rug is a recipe for disaster.
 
 - For one, forcing your team into a loop of manual code entry completely defeats the purpose of automation and breaks test isolation.
 - Secondly, relying on unpredictable telecom networks turns your suite into a flaky test nightmare due to random SMS gateway latency.
@@ -36,7 +36,7 @@ We've mapped out popular SMS testing methods on a risk spectrum — ranging from
 You leverage built-in sandboxes provided by major auth vendors — hardcoding whitelisted numbers in the Firebase Auth console or utilizing Twilio's sandbox limits with fixed dummy codes.
 
 - **The Core Idea:** It works beautifully on a developer's local machine for rapid UI prototyping and debugging.
-- **Why it's a CI/CD dead end:** It simply doesn't scale for parallel CI runners. These sandboxes impose strict rate limits and harsh caps on the number of allowed phones (usually capped at 10 in Firebase). Try spinning up a parallel test suite to register 50 users simultaneously across multiple GitHub Actions runners, and your pipeline will instantly hit a wall due to API throttling. On top of that, you miss out on testing real international SMS delivery and handling cross-region network latency when testing across multiple countries.
+- **Why it's a CI/CD dead end:** It simply doesn't scale for parallel CI runners. These sandboxes impose strict rate limits and harsh caps on the number of allowed phones (usually capped at 10 in Firebase). Try spinning up a parallel test suite with 50 parallel sign-up tests across multiple GitHub Actions runners, and your pipeline will instantly hit a wall due to API throttling. On top of that, you miss out on testing real international SMS delivery and handling cross-region network latency when testing across multiple countries.
 
 ### 🔴 Level 2: The "Infrastructure Nightmare" (Android Phone + SMS-to-Webhook / ADB / Appium)
 
@@ -80,7 +80,7 @@ With this strategy, the E2E test suite doesn't even bother trying to intercept t
 
 ### 🏛️ Level 3: The Solid Foundation
 
-- **Type:** Programmable B2B APIs with non-VoIP numbers
+- **Type:** Programmable B2B SMS verification APIs
 - **Value:** 🟢🟢🟢 (Maximum test fidelity)
 - **Complexity & Overhead:** 🔴🔴🔴 (Requires a dedicated testing budget)
 
@@ -98,7 +98,7 @@ Dedicated B2B platforms provide developers with direct access to pools of real m
 
 ### How Can Playwright Receive Real SMS Messages? Code Walkthrough
 
-Let's break down what the architecture of this solution looks like under the hood, using the [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic) service as a prime example. The gateway exposes an [SMS-Activate-compatible API](https://hero-sms.com/api) at `https://hero-sms.com/stubs/handler_api.php`: a `getNumberV2` call rents a real number and returns a JSON activation object (or a bare error string like `NO_NUMBERS`), incoming messages are pushed as `POST` webhooks, and `setStatus` completes (`6`) or cancels (`8`) the activation.
+Let's break down what the architecture of this solution looks like under the hood, using the [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026) service as a prime example. The gateway exposes an [HTTP API](https://hero-sms.com/api) at `https://hero-sms.com/stubs/handler_api.php`: a `getNumberV2` call rents a number and returns a JSON activation object (or a bare error string like `NO_NUMBERS`), incoming messages are pushed as `POST` webhooks, and `setStatus` completes (`6`) or cancels (`8`) the activation.
 
 > **Prerequisite:** HeroSMS delivers webhooks to up to three HTTPS URLs configured in your account settings — not per request. Point one of them at your runner (via an ngrok tunnel during local development), and for a production-grade CI setup whitelist the gateway's source IPs: `84.32.223.53` and `185.138.88.87`.
 
@@ -109,7 +109,7 @@ import http from 'http';
 
 // --- Type Definitions (per https://hero-sms.com/api) ---
 interface HeroSmsActivation {
-  activationId: string;
+  activationId: string | number;
   phoneNumber: string;
   activationCost: number;
   activationEndTime: string;
@@ -117,7 +117,7 @@ interface HeroSmsActivation {
 }
 
 interface HeroSmsWebhookPayload {
-  activationId: string;
+  activationId: string | number;
   service: string;
   text: string | null;
   code?: string | null;
@@ -125,7 +125,7 @@ interface HeroSmsWebhookPayload {
   receivedAt: string;
 }
 
-// SMS-Activate-compatible endpoint of HeroSMS
+// HeroSMS handler_api endpoint (docs: https://hero-sms.com/api)
 const HEROSMS_API_URL = 'https://hero-sms.com/stubs/handler_api.php';
 const HEROSMS_API_KEY = process.env.HEROSMS_API_KEY!;
 const PORT = process.env.WEBHOOK_PORT ? parseInt(process.env.WEBHOOK_PORT, 10) : 3000;
@@ -168,11 +168,12 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
         const payload = JSON.parse(body) as HeroSmsWebhookPayload;
 
         // Resolve only for our own activation; the `code` field is nullable
-        if (payload.code && payload.activationId === expectedActivationId) {
+        if (payload.code && String(payload.activationId) === expectedActivationId) {
           resolveWebhook(payload.code);
         }
 
-        // Always ACK with 200 — otherwise HeroSMS retries the delivery
+        // ACK every well-formed delivery with 200 (other activations included):
+        // otherwise HeroSMS retries the delivery
         // at least 7 times every 20-30 seconds
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'accepted' }));
@@ -197,21 +198,21 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
       server.once('error', reject);
     });
 
-    // 4. Rent a real number: GET ?action=getNumberV2
+    // 4. Rent a number that can receive SMS: GET ?action=getNumberV2
     const { data } = await axios.get<HeroSmsActivation | string>(HEROSMS_API_URL, {
       params: {
         api_key: HEROSMS_API_KEY,
         action: 'getNumberV2',
-        service: 'tg', // service code from ?action=getServicesList
-        country: 6     // country ID from ?action=getCountries
+        service: 'ot', // 'ot' = Any other, for testing your own app (codes: ?action=getServicesList)
+        country: 6     // demo value: use the country ID you test (?action=getCountries)
       }
     });
 
-    // On failure the gateway answers with a bare string ("NO_NUMBERS", "BAD_KEY", ...)
+    // On failure the gateway answers with a bare string ("NO_NUMBERS"); BAD_KEY/NO_BALANCE come as JSON with HTTP 4xx and make axios throw
     expect(typeof data, `Gateway returned "${data}" instead of an activation object`).toBe('object');
     const activation = data as HeroSmsActivation;
 
-    expectedActivationId = activation.activationId;
+    expectedActivationId = String(activation.activationId);
     const { phoneNumber } = activation;
 
     // 5. Trigger the OTP in the UI
@@ -246,9 +247,11 @@ test('End-to-End Verification via Asynchronous Webhook', async ({ page }) => {
     activationCompleted = true;
 
   } finally {
-    // 10. Money-safe teardown: cancel the rented number (status 8) if the
-    // test failed before completing the activation, so a broken pipeline
-    // doesn't leave paid rentals hanging
+    // 10. Teardown: try to cancel the rented number (status 8) if the test
+    // failed before completing the activation. A cancel within the first
+    // ~2 minutes can be refused (EARLY_CANCEL_DENIED) and is ignored here;
+    // an activation that never receives an SMS is refunded to the HeroSMS
+    // balance when it expires
     if (expectedActivationId && !activationCompleted) {
       await axios.get(HEROSMS_API_URL, {
         params: { api_key: HEROSMS_API_KEY, action: 'setStatus', id: expectedActivationId, status: 8 }
@@ -293,7 +296,7 @@ There is no silver bullet when it comes to OTP automation: your choice of approa
 
 **Q: What happens if real-world SMS delivery from the carrier takes longer than 15 seconds?**
 
-**A:** The test implementation addresses this via `Promise.race`, which acts as a hard circuit breaker to prevent the pipeline runner from hanging indefinitely due to SMS gateway latency. If cellular networks are heavily congested in a specific region, you can safely scale this timeout up to 30–45 seconds through your runner's configuration or retry policies. The gateway itself also retries undelivered webhooks (at least 7 attempts over 3+ minutes), so a transient network hiccup between HeroSMS and your runner won't lose the code.
+**A:** The test implementation addresses this via `Promise.race`, which acts as a hard circuit breaker to prevent the pipeline runner from hanging indefinitely due to SMS gateway latency. If cellular networks are heavily congested in a specific region, raise `TIMEOUT_MS` to a few minutes for international SMS, and raise Playwright's own test timeout with `test.setTimeout()` as well (the default is 30 seconds). The gateway itself also retries undelivered webhooks (at least 7 attempts over 3+ minutes), so a transient network hiccup between HeroSMS and your runner won't lose the code.
 
 **Q: Is it safe to commit the API authorization token directly into the test codebase?**
 
@@ -303,6 +306,6 @@ There is no silver bullet when it comes to OTP automation: your choice of approa
 
 ## About
 
-This guide uses [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026&utm_content=topic) — a programmable SMS verification platform with real non-VoIP numbers across dozens of countries, an [SMS-Activate-compatible REST API](https://hero-sms.com/api), and webhook delivery of incoming messages — as the reference B2B provider for the Level 3 approach.
+This guide uses [HeroSMS](https://hero-sms.com/?utm_source=gh&utm_medium=otpauto&utm_campaign=20072026) — a programmable SMS verification platform with numbers in 180+ countries, an [HTTP API](https://hero-sms.com/api), and webhook delivery of incoming messages — as the reference B2B provider for the Level 3 approach.
 
 Licensed under [MIT](LICENSE).
