@@ -288,6 +288,8 @@ There is no silver bullet when it comes to OTP automation: your choice of approa
 - **If you need to rapidly spin up frontend test coverage without sending actual texts:** Deploy local mock servers using tools like Mockoon or WireMock.
 - **If you need a bulletproof, flake-free E2E test right before a production release:** Integrate a production-grade B2B API using the event-driven Webhook model showcased in the code above.
 
+**Moving an existing suite from SMSPool?** See [SMSPool alternative: moving from the SMSPool API to HeroSMS](docs/smspool-alternative.md) for an endpoint map, a Python adapter and a migration checklist.
+
 ## FAQ
 
 **Q: How do I test the webhook logic locally on a developer's machine before deploying to a cloud CI/CD pipeline?**
